@@ -1,33 +1,44 @@
-import { auth, signOut } from "@/auth";
-import { redirect } from "next/navigation";
+import Image from "next/image";
+import { auth } from "@/auth";
+import { ReindexButton } from "./_components/ReindexButton";
 
-async function handleSignOut() {
-  "use server";
-  await signOut({ redirectTo: "/login" });
-}
+const ADMIN_EMAIL = "cnakayama@chameleon-inc.net";
 
+/** /app（会話未選択）のウェルカム画面 */
 export default async function AppPage() {
   const session = await auth();
-  if (!session?.user) redirect("/login");
+  const isAdmin = session?.user?.email === ADMIN_EMAIL;
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center gap-8">
-      <h1 className="text-3xl font-bold">いつでも道場くん</h1>
-      <div className="text-center">
-        <p className="text-gray-600">
-          ようこそ、
-          <span className="font-semibold">{session.user.name}</span> さん
-        </p>
-        <p className="text-sm text-gray-400">{session.user.email}</p>
+    <div className="flex h-full flex-col bg-gray-50">
+      {/* 管理者のみ表示するヘッダー */}
+      {isAdmin && (
+        <header className="shrink-0 border-b border-gray-200 bg-white px-6 py-3">
+          <div className="flex items-center justify-end">
+            <ReindexButton />
+          </div>
+        </header>
+      )}
+
+      {/* ウェルカムコンテンツ */}
+      <div className="flex flex-1 flex-col items-center justify-center gap-4">
+        <div className="relative h-28 w-28">
+          <Image
+            src="/dojo/4_happy_a.png"
+            alt="道場くん"
+            fill
+            className="object-contain"
+          />
+        </div>
+        <div className="text-center">
+          <p className="text-base font-semibold text-gray-700">
+            いつでも道場くん
+          </p>
+          <p className="mt-1 text-sm text-gray-400">
+            左のスレッドを選ぶか、新しい会話を始めましょう
+          </p>
+        </div>
       </div>
-      <form action={handleSignOut}>
-        <button
-          type="submit"
-          className="cursor-pointer rounded-lg bg-red-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-600"
-        >
-          サインアウト
-        </button>
-      </form>
-    </main>
+    </div>
   );
 }

@@ -9,8 +9,10 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.98.0",
     "next": "^15.1.0",
     "next-auth": "^5.0.0-beta.30",
+    "openai": "^6.25.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
