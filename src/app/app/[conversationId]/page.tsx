@@ -2,7 +2,6 @@ import { notFound, redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
 import { ChatPanel } from "./_components/ChatPanel";
-import { ShareButton } from "./_components/ShareButton";
 
 export default async function ConversationPage({
   params,
@@ -42,28 +41,15 @@ export default async function ConversationPage({
     .eq("conversation_id", conversationId)
     .order("created_at", { ascending: true });
 
+  // ヘッダー（タイトル・共有ボタン）は ChatPanel（Client Component）内に持つ。
+  // Server Component のヘッダーに置くと router.refresh() のたびに
+  // RSC 調停で ShareButton が remount されてボタンが消える問題が起きるため。
   return (
-    <div className="flex h-full flex-col">
-      {/* ヘッダー */}
-      <header className="shrink-0 border-b border-gray-200 bg-white px-6 py-3">
-        <div className="flex items-center justify-between">
-          <div className="min-w-0">
-            <h1 className="truncate text-base font-semibold text-gray-900">
-              {conversation.title}
-            </h1>
-            {conversation.category && (
-              <p className="text-xs text-gray-500">{conversation.category}</p>
-            )}
-          </div>
-          <ShareButton conversationId={conversationId} />
-        </div>
-      </header>
-
-      {/* チャットパネル（メッセージ + 入力欄） */}
-      <ChatPanel
-        initialMessages={messages ?? []}
-        conversationId={conversationId}
-      />
-    </div>
+    <ChatPanel
+      initialMessages={messages ?? []}
+      conversationId={conversationId}
+      title={conversation.title}
+      category={conversation.category ?? undefined}
+    />
   );
 }

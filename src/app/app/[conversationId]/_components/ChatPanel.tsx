@@ -4,6 +4,7 @@ import Image from "next/image";
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { ScrollAnchor } from "./ScrollAnchor";
+import { ShareButton } from "./ShareButton";
 
 // ============================================================
 // Emotion system
@@ -215,9 +216,13 @@ function TypingIndicator() {
 export function ChatPanel({
   initialMessages,
   conversationId,
+  title,
+  category,
 }: {
   initialMessages: Message[];
   conversationId: string;
+  title: string;
+  category?: string;
 }) {
   const [isPending, startTransition] = useTransition();
   const [messages, setMessages] = useState<Message[]>(initialMessages);
@@ -282,7 +287,24 @@ export function ChatPanel({
   }
 
   return (
-    <div className="flex h-full flex-col bg-gray-50">
+    // flex-1 min-h-0: flex-col 親の中で正しく残余スペースを埋める（h-full は不使用）
+    <div className="flex flex-1 min-h-0 flex-col bg-gray-50">
+      {/* ── ヘッダー（Client Component 内に収める = router.refresh() の影響を受けない） ── */}
+      <header className="shrink-0 border-b border-gray-200 bg-white px-6 py-3">
+        <div className="flex items-center justify-between">
+          <div className="min-w-0">
+            <h1 className="truncate text-base font-semibold text-gray-900">
+              {title}
+            </h1>
+            {category && (
+              <p className="text-xs text-gray-500">{category}</p>
+            )}
+          </div>
+          {/* 共有ボタン: Client Component 内なので router.refresh() で消えない */}
+          <ShareButton conversationId={conversationId} />
+        </div>
+      </header>
+
       {/* メッセージリスト */}
       <div className="flex-1 overflow-y-auto px-6 py-6">
         <div className="mx-auto max-w-2xl space-y-5">
