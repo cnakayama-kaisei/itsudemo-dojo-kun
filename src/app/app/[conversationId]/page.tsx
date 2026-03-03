@@ -2,6 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
 import { ChatPanel } from "./_components/ChatPanel";
+import { ShareButton } from "./_components/ShareButton";
 
 export default async function ConversationPage({
   params,
@@ -54,10 +55,7 @@ export default async function ConversationPage({
               <p className="text-xs text-gray-500">{conversation.category}</p>
             )}
           </div>
-          {/* 共有ボタン（ダミー）*/}
-          <button className="cursor-pointer rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-600 transition-colors hover:bg-gray-50">
-            共有
-          </button>
+          <ShareButton conversationId={conversationId} />
         </div>
       </header>
 
