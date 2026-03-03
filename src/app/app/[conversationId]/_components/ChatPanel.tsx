@@ -287,9 +287,19 @@ export function ChatPanel({
   }
 
   return (
-    // flex-1 min-h-0: flex-col 親の中で正しく残余スペースを埋める（h-full は不使用）
-    <div className="flex flex-1 min-h-0 flex-col bg-gray-50">
-      {/* ── ヘッダー（Client Component 内に収める = router.refresh() の影響を受けない） ── */}
+    /*
+     * レイアウト構造:
+     *   h-full          : layout の右側コンテナ（100vh）をフルに使う
+     *   flex flex-col   : 縦方向に積む
+     *   overflow-hidden : 子要素の意図しない overflow を封じる
+     *
+     * 子要素の責務:
+     *   header    → shrink-0（固定）
+     *   messages  → flex-1 min-h-0 overflow-y-auto overscroll-contain（スクロール領域）
+     *   composer  → shrink-0（固定）
+     */
+    <div className="flex h-full flex-col overflow-hidden">
+      {/* ── ヘッダー（固定） ── */}
       <header className="shrink-0 border-b border-gray-200 bg-white px-6 py-3">
         <div className="flex items-center justify-between">
           <div className="min-w-0">
@@ -300,13 +310,12 @@ export function ChatPanel({
               <p className="text-xs text-gray-500">{category}</p>
             )}
           </div>
-          {/* 共有ボタン: Client Component 内なので router.refresh() で消えない */}
           <ShareButton conversationId={conversationId} />
         </div>
       </header>
 
-      {/* メッセージリスト */}
-      <div className="flex-1 overflow-y-auto px-6 py-6">
+      {/* ── メッセージ一覧（スクロール領域） ── */}
+      <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain bg-gray-50 px-6 py-6">
         <div className="mx-auto max-w-2xl space-y-5">
           {messages.length > 0 ? (
             messages.map((msg) =>
@@ -348,12 +357,18 @@ export function ChatPanel({
           {/* 生成中は typing インジケータを表示 */}
           {isPending && <TypingIndicator />}
 
-          <ScrollAnchor />
+          {/*
+           * scrollTrigger = messages.length を渡す。
+           * ScrollAnchor は [messages.length] が増えたときだけスクロールする。
+           * router.refresh() や isPending 変化だけでは messages.length が変わらないため
+           * 不要なスクロールが起きず、ユーザーが上スクロール中も邪魔されない。
+           */}
+          <ScrollAnchor scrollTrigger={messages.length} />
         </div>
       </div>
 
-      {/* 入力エリア */}
-      <div className="border-t border-gray-200 bg-white px-6 py-4">
+      {/* ── 入力エリア（固定） ── */}
+      <div className="shrink-0 border-t border-gray-200 bg-white px-6 py-4">
         <div className="mx-auto max-w-2xl">
           {error && (
             <p className="mb-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">
