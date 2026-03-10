@@ -2,9 +2,15 @@
 
 import { useState } from "react";
 
-type IndexResult = {
-  files: number;
+type SetResult = {
+  files: string[];
   chunks: number;
+};
+
+type IndexResult = {
+  total_files: number;
+  total_chunks: number;
+  sets: Record<string, SetResult>;
 };
 
 type Status = "idle" | "loading" | "success" | "error";
@@ -29,7 +35,11 @@ export function ReindexButton() {
         return;
       }
 
-      setResult({ files: data.files, chunks: data.chunks });
+      setResult({
+        total_files: data.total_files,
+        total_chunks: data.total_chunks,
+        sets: data.sets,
+      });
       setStatus("success");
     } catch {
       setErrorMsg("通信エラーが発生しました");
@@ -41,7 +51,8 @@ export function ReindexButton() {
     <div className="flex items-center gap-3">
       {status === "success" && result && (
         <span className="rounded-full bg-green-100 px-3 py-1 text-xs font-medium text-green-700">
-          ✓ {result.files}ファイル・{result.chunks}チャンク登録済み
+          ✓ {result.total_files}ファイル・{result.total_chunks}チャンク登録済み
+          （core:{result.sets.core?.chunks ?? 0} / ads:{result.sets.ads?.chunks ?? 0} / recent:{result.sets.recent?.chunks ?? 0}）
         </span>
       )}
       {status === "error" && errorMsg && (

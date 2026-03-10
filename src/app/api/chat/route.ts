@@ -8,26 +8,31 @@ import { embedText, toVectorLiteral, EMBED_MODEL } from "@/lib/embedding";
 // System Prompt
 // ============================================================
 const SYSTEM_PROMPT = `あなたは「いつでも道場くん」。営業の商談相談に短く実践的に答える。
+
 出力は必ず以下の順番：
 1) 結論（1〜2行）
 2) 次の一言候補（3〜5個、コピペできる短文）
-3) NG（言ってはいけない例と理由を1〜2個）
+3) NG（言ってはいけない例と理由。最大2個。各NG例は15文字以内。NGに肯定文・褒め言葉を混ぜない。）
 4) 理由（短く）
-参考資料が提供された場合はそれを優先して活用すること。資料に記載のない内容は「資料外なので仮説」と明記して断定しない。`;
+
+## 参考資料の使い方（資料が提供された場合）
+- 質問に直接関係する部分だけを使う。関係が薄い資料は無視してよい。
+- 複数資料が矛盾する場合は共通部分のみ採用し、「資料内で見解が分かれる」と一言だけ注記する。
+- 資料の文章をそのままコピーせず、要約して使う。
+- 回答本文に「参照:」「出典:」「chunk」等のソース情報を書かないこと（システムが別途表示する）。
+- 資料に記載のない内容は「資料外なので仮説」と明記し、断定しない。
+
+## 出力制約
+- 冗長な前置き・締めの挨拶は不要。
+- 文章は全体的に短く簡潔に書く。`;
 
 // ============================================================
-// Emotion parsing（ChatPanel の parseAssistantContent と同じロジック）
+// Emotion parsing
 // ============================================================
 
 const VALID_EMOTIONS = [
-  "surprise",
-  "thinking",
-  "sad",
-  "happy",
-  "analysis",
-  "intensity",
-  "celebration",
-  "cool",
+  "surprise", "thinking", "sad", "happy",
+  "analysis", "intensity", "celebration", "cool",
 ] as const;
 type Emotion = (typeof VALID_EMOTIONS)[number];
 
@@ -46,7 +51,20 @@ function parseEmotion(content: string): Emotion {
 // RAG 設定
 // ============================================================
 
-const RAG_TOP_K = 6;
+/** 最終的に LLM に渡すチャンク上限 */
+const RAG_TOP_K = 4;
+
+/** primary set（ads or core）から取得する件数 */
+const PRIMARY_K = 3;
+
+/** secondary set（recent）から取得する件数 */
+const SECONDARY_K = 1;
+
+/**
+ * 類似度しきい値。この値未満のチャンクは品質が低いとして捨てる。
+ * 0〜1 の範囲。高いほど厳格。0.78 は実運用でのデフォルト推奨値。
+ */
+const SIMILARITY_THRESHOLD = 0.78;
 
 type KnowledgeChunk = {
   id: string;
@@ -57,21 +75,37 @@ type KnowledgeChunk = {
 };
 
 // ============================================================
+// Intent ルーティング
+// ============================================================
+
+/**
+ * 広告・まさか・エージェント誤認系に関係するキーワード。
+ * これらが含まれる場合は ads セットを優先して検索する。
+ */
+const ADS_KEYWORDS = [
+  "広告", "まさか", "エージェント", "LP", "釣り", "CM",
+  "メディア", "バナー", "リスティング", "認知", "インプレッション",
+  "クリック", "コンバージョン", "リード", "マーケティング",
+];
+
+function detectPrimarySet(message: string): "ads" | "core" {
+  return ADS_KEYWORDS.some((kw) => message.includes(kw)) ? "ads" : "core";
+}
+
+// ============================================================
 // POST /api/chat
 // Body:     { conversationId: string, message: string }
 // Response: { text: string, citations: string[], emotion: string }
 // ============================================================
 export async function POST(request: NextRequest) {
   try {
-    // 認証確認（/api/chat は middleware の matcher 外なので自前でチェック）
     const session = await auth();
     if (!session?.user?.email) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    console.log(
-      `[/api/chat] chat_model=${getChatModel()} embed_model=${EMBED_MODEL}`,
-    );
+    const chatModel = getChatModel();
+    console.log(`[/api/chat] chat_model=${chatModel} embed_model=${EMBED_MODEL}`);
 
     const body = await request.json();
     const conversationId: string = body.conversationId;
@@ -103,10 +137,7 @@ export async function POST(request: NextRequest) {
       .single();
 
     if (!conv) {
-      return NextResponse.json(
-        { error: "Conversation not found" },
-        { status: 404 },
-      );
+      return NextResponse.json({ error: "Conversation not found" }, { status: 404 });
     }
 
     // 1) user メッセージを先に保存
@@ -117,24 +148,58 @@ export async function POST(request: NextRequest) {
     });
     if (insertError) throw new Error(`DB insert failed: ${insertError.message}`);
 
-    // 2) RAG: ユーザーメッセージを embed → 類似チャンクを取得
-    //    エラー時はチャットを止めず、コンテキストなしで続行する（Graceful degradation）
+    // 2) RAG: intent ルーティング → 2セット並列検索 → 合算・しきい値フィルタ
+    //    エラー時はチャットを止めず、コンテキストなしで続行（Graceful degradation）
     let knowledgeChunks: KnowledgeChunk[] = [];
+    const primarySet = detectPrimarySet(message);
+    const secondarySet = "recent" as const;
+
     try {
       const queryEmbedding = await embedText(message);
-      const { data: ragData } = await db.rpc("match_knowledge_chunks", {
-        query_embedding: toVectorLiteral(queryEmbedding),
-        set_name: "default",
-        match_count: RAG_TOP_K,
-      });
-      if (ragData && ragData.length > 0) {
-        knowledgeChunks = ragData as KnowledgeChunk[];
+      const vectorLiteral = toVectorLiteral(queryEmbedding);
+
+      // primary + secondary を並列で取得
+      const [primaryRes, secondaryRes] = await Promise.all([
+        db.rpc("match_knowledge_chunks", {
+          query_embedding: vectorLiteral,
+          set_name: primarySet,
+          match_count: PRIMARY_K,
+        }),
+        db.rpc("match_knowledge_chunks", {
+          query_embedding: vectorLiteral,
+          set_name: secondarySet,
+          match_count: SECONDARY_K,
+        }),
+      ]);
+
+      // 合算・重複排除（source#chunk_index をキーとする）
+      const seen = new Set<string>();
+      const merged: KnowledgeChunk[] = [];
+      for (const chunk of [
+        ...((primaryRes.data ?? []) as KnowledgeChunk[]),
+        ...((secondaryRes.data ?? []) as KnowledgeChunk[]),
+      ]) {
+        const key = `${chunk.source}#${chunk.chunk_index}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          merged.push(chunk);
+        }
       }
+
+      // 類似度しきい値フィルタ → 上限 RAG_TOP_K 件に絞る
+      knowledgeChunks = merged
+        .filter((c) => c.similarity >= SIMILARITY_THRESHOLD)
+        .slice(0, RAG_TOP_K);
+
+      console.log(
+        `[/api/chat] RAG primary=${primarySet} chunks=${knowledgeChunks.length}` +
+        ` (before filter=${merged.length}, threshold=${SIMILARITY_THRESHOLD})`,
+      );
     } catch (ragError) {
       console.warn("[/api/chat] RAG 検索をスキップ:", ragError);
     }
 
-    // 3) 直近 20 件を取得（今保存した user メッセージも含まれる）
+    // 3) 直近 20 件を取得
     const { data: history } = await db
       .from("messages")
       .select("role, content")
@@ -144,7 +209,7 @@ export async function POST(request: NextRequest) {
 
     const contextMessages = (history ?? []).reverse();
 
-    // 4) ナレッジコンテキストを system メッセージとして組み立てる
+    // 4) ナレッジコンテキストを system メッセージに付与
     let systemWithContext = SYSTEM_PROMPT;
     if (knowledgeChunks.length > 0) {
       const ragContext = knowledgeChunks
@@ -159,7 +224,7 @@ export async function POST(request: NextRequest) {
 
     // 5) OpenAI API 呼び出し
     const completion = await getOpenAI().chat.completions.create({
-      model: getChatModel(),
+      model: chatModel,
       messages: [
         { role: "system", content: systemWithContext },
         ...contextMessages.map((m) => ({
@@ -170,15 +235,14 @@ export async function POST(request: NextRequest) {
     });
 
     const aiText =
-      completion.choices[0]?.message?.content ??
-      "（返答を生成できませんでした）";
+      completion.choices[0]?.message?.content ?? "（返答を生成できませんでした）";
 
-    // 6) citations リストを構築（APIレスポンス用。DBには保存しない）
+    // 6) citations リスト（APIレスポンス用。DBには保存しない）
     const citations: string[] = knowledgeChunks.map(
       (c) => `${c.source}#chunk${c.chunk_index}`,
     );
 
-    // 7) assistant メッセージを「本文のみ」で保存（参照列挙は付けない）
+    // 7) assistant メッセージを「本文のみ」で保存
     await db.from("messages").insert({
       conversation_id: conversationId,
       role: "assistant",
@@ -198,10 +262,12 @@ export async function POST(request: NextRequest) {
       meta: {
         conversation_id: conversationId,
         rag_chunks_used: knowledgeChunks.length,
+        rag_primary_set: primarySet,
+        rag_routed_to_ads: primarySet === "ads",
       },
     });
 
-    // 10) レスポンス: { text, citations, emotion }
+    // 10) レスポンス
     return NextResponse.json({
       text: aiText,
       citations,

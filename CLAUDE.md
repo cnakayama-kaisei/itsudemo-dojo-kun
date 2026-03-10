@@ -78,6 +78,45 @@ npm run lint     # ESLint 実行
 
 RLS は MVP では OFF。各テーブルのコメントにポリシー案を記載済み。
 
+### RAG（ナレッジ検索）
+
+#### フォルダ構成と用途
+
+```
+knowledge/
+├── core/    ← 型・原理原則など本体となる知識（メイン）
+│   └── sales_coaching_knowledge20260302.md
+├── ads/     ← 広告/まさか/エージェント誤認系の知識
+│   └── （.md / .txt を置く）
+└── recent/  ← 直近FB・補足・更新情報（常に少量混ぜる）
+    └── （.md / .txt を置く）
+```
+
+#### RAG 設定（`/api/chat/route.ts`）
+
+| 定数 | 値 | 説明 |
+|---|---|---|
+| `RAG_TOP_K` | 4 | LLMに渡すチャンク上限 |
+| `PRIMARY_K` | 3 | primary set から取得する件数 |
+| `SECONDARY_K` | 1 | recent set から取得する件数 |
+| `SIMILARITY_THRESHOLD` | 0.78 | これ未満のチャンクは除外 |
+
+#### インテントルーティング
+
+- メッセージに `広告/まさか/エージェント/LP/釣り/CM/メディア` 等が含まれる → `ads` セット優先
+- それ以外 → `core` セット優先
+- `recent` は常に1件補足として追加
+
+#### ナレッジ追加・更新手順
+
+1. 対応するフォルダ（`core/` `ads/` `recent/`）に `.md` または `.txt` を配置
+2. `git add . && git commit && git push` でデプロイ
+3. `/app` 画面の「再インデックス」ボタンを押す（または `POST /api/knowledge/index`）
+4. 各セットのチャンク数が表示されれば完了
+
+再インデックスは冪等（該当セットの既存チャンクを全削除 → 再 insert）。
+他セットのデータは影響を受けない。
+
 ### 必要な環境変数
 
 `.env.example` を参照。`.env.local` にコピーして値を設定する。
